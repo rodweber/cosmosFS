@@ -4,11 +4,8 @@
 %% -execution on different satellites through parallel programming
 
 %% to do:
-%% -physics: SRP, J2, aerodynamics
-%% -run cases to prove extended PL through solar pressure
 %% -count memory and flops, estimate storage requirements, conclude whether possible to run on Arduino
 %% -HIL
-%% -elliptical orbit
 %% -start further workers to emulate OBC, GPS for mode switching
 %% -parellel-run orbitDetermination
 %% -clarify what data of the header goes to each satellite
@@ -30,8 +27,9 @@ oldpath = path; path(oldpath,'..\cosmosSupport\')
 sstInitialFunction=@cluxterInitial;
 
 %% actual initial conditions of ODE, altitude is not used here therefore the ~
-[~,ns,~,panels,rho,v,radiusOfEarth,~,mu,satelliteMass,panelSurface,...
-  sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite]=sstInitialFunction(); 
+[~,ns,~,panels,Tatmos,rho,v,radiusOfEarth,~,mu,satelliteMass,panelSurface,...
+  sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,...
+  SSCoeff,SSParameters,meanAnomalyOffSet]=sstInitialFunction(); 
 
 DQ = parallel.pool.DataQueue;
 afterEach(DQ,@disp);
@@ -63,8 +61,7 @@ TIME_PP           =0;
 
 %% non-gravitational perturbations
 wind          =windOn*rho/2*v^2*[-1 0 0]';
-sunlight      =sunOn*2*4.5e-6*[0 0 -1]' ;       %% at reference location, needs to be rotated later
-
+sunlight      =sunOn*2*4.5e-6*[0 -1 0]' ; %% only dust dawn orbit
 %refsurf=panelSurface*panels(1);
 refSurf=panelSurface*panels(3);
 
@@ -74,7 +71,7 @@ betas             =0:deltaAngle:180;     %% pitch
 gammas            =0:deltaAngle:360;     %% yaw
 
 aeropressureforcevector  =aeropressureforcevectorfunction(wind,panelSurface,panels(1),...
-                                                          panels(2),panels(3),alphas,betas,gammas);
+                                                          panels(2),panels(3),alphas,betas,gammas,rho,v,Tatmos);
 solarpressureforcevector =solarpressureforcevectorfunction(sunlight,panelSurface,panels(1),...
                                                           panels(2),panels(3),alphas,betas,gammas);
 
@@ -98,8 +95,8 @@ spmd(ns) %% create satellite instances
       %send(DQ,strcat(num2str(labindex),': orbittimer begin: ',num2str(posixtime(datetime('now'))-startTime)));
 
       [meanMotion,meanAnomalyFromAN,altitude,sst]=whereInWhatOrbit(sst,altitude,(idx-1)/size(orbitSections,2));
-      %% settings for control algorithm
-      [P,IR,A,B]=riccatiequation(meanMotion/180*pi);  
+      %% settings for control algorithm, is this necessary every orbit?
+      [P,IR,A,B]=riccatiequation(meanMotion/180*pi,SSCoeff);  
       %% 
       %send(DQ,strcat(num2str(labindex),': MeanMotion: ',num2str(meanMotion)));
       %send(DQ,strcat(num2str(labindex),': meanAnomalyFromAN: ',num2str(meanAnomalyFromAN)));
@@ -116,36 +113,36 @@ spmd(ns) %% create satellite instances
         setAttitude();
         %% compute attitude for next section
         %% determine desired trajectory
-        sstDesired=sstDesiredFunction(orbitSections(idx)/meanMotion,meanMotion/180*pi,labindex,goFoFli);
+        sstDesired=sstDesiredFunction(orbitSections(idx)/meanMotion,meanMotion/180*pi,labindex,goFoFli,SSCoeff,squeeze(SSParameters(:,labindex,1)),meanAnomalyOffSet);
         %[sstDesired]=cluxterDesired(timetemptemp,MeanMotion,i)
         %% determine error
         error(1:6,labindex)=sst(1:6)-sstDesired(1:6);
         if not(masterSatellite)
           
           %! ISL error
-          for i=1:ns
-            if i~=labindex
-              labSend(error(:,labindex),i); %% send my error to i
-              error(:,i) = labReceive(i); %% receive i's error, error contains the error vector for each i
+          for j=1:ns
+            if j~=labindex
+              labSend(error(:,labindex),j); %% send my error to i
+              error(:,j) = labReceive(j); %% receive i's error, error contains the error vector for each i
             end
           end
           averageError=zeros(6,ns);
           %! compute average error
-          for i=1:ns %% compute average error
-            averageError(:,i)=averageError(:,i)+error(:,i)/ns; %% averageError contains columns of average error computed on each i
+          for i=j:ns %% compute average error
+            averageError(:,j)=averageError(:,j)+error(:,j)/ns; %% averageError contains columns of average error computed on each i
           end
           %! ISL averageerror
-          for i=1:ns
-            if i~=labindex
-              labSend(averageError(:,i),i);
-              averageError(:,i)= labReceive(i);
+          for j=1:ns
+            if j~=labindex
+              labSend(averageError(:,j),j);
+              averageError(:,j)= labReceive(j);
             end
           end
           %% check whether all errors are the same, this error check is relatively memory intensive, worth it?
           errorSum=0;
-          for i=2:ns
+          for k=2:ns
             for j=1:6
-              errorSum=errorSum+averageError(j,1)-averageError(j,i);
+              errorSum=errorSum+averageError(j,1)-averageError(j,k);
             end
           end
           if errorSum~=0
@@ -174,14 +171,14 @@ spmd(ns) %% create satellite instances
             refPosChange(1:3)=sst(1:3)-sstOld(1:3);
           end
           if labindex==1
-            for i=2:ns
-              tag=1000000*i+10000*idx+100*orbitCounter+1;
-              labSend(refPosChange,i,tag);
+            for j=2:ns
+              tag=1000000*j+10000*idx+100*orbitCounter+1;
+              labSend(refPosChange,j,tag);
             end
           end
-          for i=2:ns
-            if labindex==i
-              tag=1000000*i+10000*idx+100*orbitCounter+1;            
+          for j=2:ns
+            if labindex==j
+              tag=1000000*j+10000*idx+100*orbitCounter+1;            
               refPosChange= labReceive(1,tag);
             end
           end                 
@@ -246,7 +243,7 @@ function [meanMotion,meanAnomalyFromAN,altitude,sst]=whereInWhatOrbit(sst,altitu
     end    
   end
   %% use sst, meanAnomalyFromAN and altitude either from GPS or from input parameters, %! define rule
-  [rho,v,radiusOfEarth,mu,meanMotion]=orbitalproperties(altitude);
+  [rho,Tatmos,v,radiusOfEarth,mu,meanMotion,SSOinclination,J2]=orbitalproperties(altitude);
   meanMotion=meanMotion/pi*180;
 end
 
