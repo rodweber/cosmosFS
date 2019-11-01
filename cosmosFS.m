@@ -20,7 +20,7 @@
 %% 29/09/2019:  Ivanov case works
 %% 26/09/2019:  cycle works, computational algorithm incomplete
 
-clc;clear all;close all;
+close all;clear all;clc;%#ok<CLALL>
 oldpath = path; path(oldpath,'..\matlabfunctions\')
 oldpath = path; path(oldpath,'..\cosmosSupport\')
 
