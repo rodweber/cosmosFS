@@ -13,23 +13,18 @@
 %% -one-RW control law
 %% -respect P/L attitude needs
 
-%% Revision history:
-%% 29/09/2019:  Ivanov case works
-%% 26/09/2019:  cycle works, computational algorithm incomplete
-
 clc;clear all;close all;
 oldpath = path; path(oldpath,'..\matlabfunctions\')
 oldpath = path; path(oldpath,'..\cosmosSupport\')
 
 %% symbolic names of initial conditions and desired statevector functions
 %sstInitialFunction=@IRSRendezvousInitial;
-%sstInitialFunction=@IvanovFormationFlightInitial;
-sstInitialFunction=@cluxterInitial;
+sstInitialFunction=@IvanovFormationFlightInitial;
+%sstInitialFunction=@cluxterInitial;
 
 %% actual initial conditions of ODE, altitude is not used here therefore the ~
-[~,ns,~,panels,Tatmos,rho,v,radiusOfEarth,~,mu,satelliteMass,panelSurface,...
-  sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,...
-  SSCoeff,SSParameters,meanAnomalyOffSet]=sstInitialFunction(); 
+[~      ,ns,~       ,panels,rho,Tatmos,v,radiusOfEarth,~         ,mu,satelliteMass,panelSurface,sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,SSCoeff,~           ,SSParameters,meanAnomalyOffSet] = sstInitialFunction(); 
+%[sstTemp,ns,altitude,panels,rho,Tatmos,v,radiusOfEarth,meanMotion,mu,satelliteMass,panelSurface,sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,SSCoeff,inclination,SSParameters,meanAnomalyOffSet]=IvanovFormationFlightInitial()
 
 DQ = parallel.pool.DataQueue;
 afterEach(DQ,@disp);
@@ -37,14 +32,14 @@ parpool(ns);
 
 startTime=posixtime(datetime('now')); %% posixtime, i.e. seconds
 accelerationFactor=10000;
-maxOrbits=120;
+maxOrbits=20;
 
 %% initial idx and altitude
 idx=120;
 altitude=340000;  
 
 %% data that will later be per satellite and therefore inside SPMD loop
-orbitSection    =2;         %degree
+orbitSection    =2;         %size of orbit section [deg]
 orbitSections   =[1:orbitSection:360];
 orbitCounter    =0;
 error           =zeros(6,ns);
@@ -92,14 +87,11 @@ spmd(ns) %% create satellite instances
     while (goFoFli==1 || goFoFli==2)  %% orbit loop
       orbitCounter=orbitCounter+1;
       startOrbit=now; %% posixtime, i.e. seconds
-      %send(DQ,strcat(num2str(labindex),': orbittimer begin: ',num2str(posixtime(datetime('now'))-startTime)));
 
       [meanMotion,meanAnomalyFromAN,altitude,sst]=whereInWhatOrbit(sst,altitude,(idx-1)/size(orbitSections,2));
       %% settings for control algorithm, is this necessary every orbit?
       [P,IR,A,B]=riccatiequation(meanMotion/180*pi,SSCoeff);  
       %% 
-      %send(DQ,strcat(num2str(labindex),': MeanMotion: ',num2str(meanMotion)));
-      %send(DQ,strcat(num2str(labindex),': meanAnomalyFromAN: ',num2str(meanAnomalyFromAN)));
       
       %% wait until end of orbit section
       idx = find(orbitSections >= meanAnomalyFromAN,1,'first');
@@ -114,11 +106,9 @@ spmd(ns) %% create satellite instances
         %% compute attitude for next section
         %% determine desired trajectory
         sstDesired=sstDesiredFunction(orbitSections(idx)/meanMotion,meanMotion/180*pi,labindex,goFoFli,SSCoeff,squeeze(SSParameters(:,labindex,1)),meanAnomalyOffSet);
-        %[sstDesired]=cluxterDesired(timetemptemp,MeanMotion,i)
-        %% determine error
+        %% determine error        
         error(1:6,labindex)=sst(1:6)-sstDesired(1:6);
-        if not(masterSatellite)
-          
+        if not(masterSatellite) %% 
           %! ISL error
           for j=1:ns
             if j~=labindex
@@ -126,11 +116,13 @@ spmd(ns) %% create satellite instances
               error(:,j) = labReceive(j); %% receive i's error, error contains the error vector for each i
             end
           end
+          
           averageError=zeros(6,ns);
           %! compute average error
           for i=j:ns %% compute average error
             averageError(:,j)=averageError(:,j)+error(:,j)/ns; %% averageError contains columns of average error computed on each i
           end
+          
           %! ISL averageerror
           for j=1:ns
             if j~=labindex
@@ -154,7 +146,7 @@ spmd(ns) %% create satellite instances
         end
         
         %% compute attitude
-        sstOld=sst;
+        sstOld=sst;       
         [sst,~]=SSEquation(...
           IR,P,A,B,orbitSection/meanMotion,sstOld,error(:,labindex),...
           sqrt(wind(1)^2+wind(2)^2+wind(3)^2),sqrt(sunlight(1)^2+sunlight(2)^2+sunlight(3)^2),...
@@ -243,8 +235,8 @@ function [meanMotion,meanAnomalyFromAN,altitude,sst]=whereInWhatOrbit(sst,altitu
     end    
   end
   %% use sst, meanAnomalyFromAN and altitude either from GPS or from input parameters, %! define rule
-  [rho,Tatmos,v,radiusOfEarth,mu,meanMotion,SSOinclination,J2]=orbitalproperties(altitude);
-  meanMotion=meanMotion/pi*180;
+  [rho,Tatmos,v,radiusOfEarth,mu,meanMotion,SSOinclination,J2]=orbitalproperties(altitude);  
+  meanMotion=meanMotion/pi*180; %% convert meanMotion to [deg] %! unify asap
 end
 
 
@@ -284,7 +276,7 @@ function [goFoFli,batteryOK]=getMode(maxOrbits,orbitCounter,DQ)
     send(DQ,strcat(num2str(labindex),': leaving loop - filestop'))
     goFoFli=20;
   else
-    if orbitCounter<10
+    if orbitCounter<1000
       goFoFli=1;
     else
       goFoFli=2;
