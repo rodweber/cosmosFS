@@ -14,8 +14,8 @@
 %% -respect P/L attitude needs
 
 clc;clear all;close all;
-oldpath = path; path(oldpath,'..\matlabfunctions\')
-oldpath = path; path(oldpath,'..\cosmosSupport\')
+oldpath = path; path(oldpath,strcat('..',filesep,'matlabfunctions',filesep))
+oldpath = path; path(oldpath,strcat('..',filesep,'cosmosSupport',filesep))
 
 %% symbolic names of initial conditions and desired statevector functions
 %sstInitialFunction=@IRSRendezvousInitial;
