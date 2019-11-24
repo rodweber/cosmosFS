@@ -23,8 +23,9 @@ sstInitialFunction=@IvanovFormationFlightInitial;
 %sstInitialFunction=@cluxterInitial;
 
 %% actual initial conditions of ODE, altitude is not used here therefore the ~
-[~      ,ns,~       ,panels,rho,Tatmos,v,radiusOfEarth,~         ,mu,satelliteMass,panelSurface,sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,SSCoeff,~           ,SSParameters,meanAnomalyOffSet] = sstInitialFunction(); 
-%[sstTemp,ns,altitude,panels,rho,Tatmos,v,radiusOfEarth,meanMotion,mu,satelliteMass,panelSurface,sstDesiredFunction,windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,SSCoeff,inclination,SSParameters,meanAnomalyOffSet]=IvanovFormationFlightInitial()
+[~,ns,~,panels,rho,Tatmos,v,radiusOfEarth,~,mu,satelliteMass,panelSurface,sstDesiredFunction,...
+  windOn,sunOn,deltaAngle,timetemp,totalTime,wakeAerodynamics,masterSatellite,SSCoeff,~,...
+  SSParameters,meanAnomalyOffSet] = sstInitialFunction(); 
 
 DQ = parallel.pool.DataQueue;
 afterEach(DQ,@disp);
@@ -32,11 +33,11 @@ parpool(ns);
 
 startTime=posixtime(datetime('now')); %% posixtime, i.e. seconds
 accelerationFactor=10000;
-maxOrbits=20;
+maxOrbits=50;
 
 %% initial idx and altitude
 idx=120;
-altitude=340000;  
+altitude=340000;  %% altitude [m]
 
 %% data that will later be per satellite and therefore inside SPMD loop
 orbitSection    =2;         %size of orbit section [deg]
@@ -89,6 +90,7 @@ spmd(ns) %% create satellite instances
       startOrbit=now; %% posixtime, i.e. seconds
 
       [meanMotion,meanAnomalyFromAN,altitude,sst]=whereInWhatOrbit(sst,altitude,(idx-1)/size(orbitSections,2));
+      %%% meanMotion in [deg/s]
       %% settings for control algorithm, is this necessary every orbit?
       [P,IR,A,B]=riccatiequation(meanMotion/180*pi,SSCoeff);  
       %% 
@@ -140,8 +142,9 @@ spmd(ns) %% create satellite instances
           if errorSum~=0
             send(DQ,strcat(num2str(labindex),': error sum NOK:',num2str(errorSum) ));
           end
-          %! assign average error, i.e. compute final error
-          error(2:6,labindex) =error(2:6,labindex)-averageError(2:6,labindex);
+          %% assign average error, i.e. compute final error
+          %error(2:6,labindex) =error(2:6,labindex)-averageError(2:6,labindex);
+          %% shift error
           error(1,labindex)   =error(1,labindex)-max(error(1,:));
         end
         
@@ -236,6 +239,7 @@ function [meanMotion,meanAnomalyFromAN,altitude,sst]=whereInWhatOrbit(sst,altitu
   end
   %% use sst, meanAnomalyFromAN and altitude either from GPS or from input parameters, %! define rule
   [rho,Tatmos,v,radiusOfEarth,mu,meanMotion,SSOinclination,J2]=orbitalproperties(altitude);  
+  %%% meanMotion [rad/s]
   meanMotion=meanMotion/pi*180; %% convert meanMotion to [deg] %! unify asap
 end
 
